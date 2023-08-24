@@ -25,6 +25,7 @@ client *client_list = NULL;
 fd_set fd_all;
 fd_set fd_write;
 fd_set fd_read;
+int sockfd;
 
 void my_printf(char *str, int fd)
 {
@@ -41,6 +42,9 @@ void clean_all()
 		remove_client(ptr->id);
 		ptr = client_list;
 	}
+
+	if (sockfd >= 0)
+		close(sockfd);
 }
 
 int fatal() // Bazooka :D
@@ -303,7 +307,7 @@ int main(int ac, char **av)
 	}
 	int port = atoi(av[1]);
 
-	int sockfd, connfd, maxfd;
+	int connfd, maxfd;
 	struct sockaddr_in servaddr;
 
 	// socket create and verification
