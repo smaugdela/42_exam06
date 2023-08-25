@@ -17,14 +17,17 @@ typedef struct client
 	int id;
 	int fd;
 	char *buf;
+	char *to_send;
 	struct client *next;
 
 } client;
 
 client *client_list = NULL;
+
 fd_set fd_all;
 fd_set fd_write;
 fd_set fd_read;
+
 int sockfd;
 
 void my_printf(char *str, int fd)
@@ -113,12 +116,13 @@ void broadcast_message(char *message, client *sender)
 
 	while (ptr)
 	{
-		if (ptr != sender && FD_ISSET(ptr->fd, &fd_write)) // On ne renvoie pas le message de quelqu'un à lui-même et On envoie le message a ce client que si il est pret a le recevoir
+		if (ptr != sender) // On ne renvoie pas le message de quelqu'un à lui-même et On envoie le message a ce client que si il est pret a le recevoir
 		{
 
-			my_printf("Sending message\n", 1);
+			my_printf("Setting message in to_send buffer\n", 1);
 
-			send(ptr->fd, message, strlen(message), 0);
+			char *new_to_send = str_join(ptr->to_send, message);
+			ptr->to_send = new_to_send;
 		}
 		ptr = ptr->next;
 	}
@@ -142,6 +146,7 @@ void add_client(int fd)
 	// Add client fd to the set of fd to listen to
 	FD_SET(fd, &fd_all);
 	new_client->buf = NULL;
+	new_client->to_send = NULL;
 	new_client->next = NULL;
 
 	// Tell everyone that a nex client has arrived
@@ -198,6 +203,7 @@ void remove_client(int id)
 	// Close its socket fd
 	close(ptr->fd);
 	free(ptr->buf);
+	free(ptr->to_send);
 	free(ptr);
 
 	my_printf("Client left.\n", 1);
@@ -228,11 +234,14 @@ int receive_message(client *client)
 	int ret = 0;
 	char buffer[4096 + 1];
 
-	my_printf("in receive message\n", 1);
+	my_printf("In receive message\n", 1);
 
 	// While there are characters to read, add them to the client's buffer
-	while ((ret = recv(client->fd, buffer, 4096, 0)) > 0)
+	while ((ret = recv(client->fd, buffer, 4096, MSG_DONTWAIT)) > 0)
 	{
+
+		my_printf("Receive message loop", 1);
+
 		len += ret;
 		buffer[ret] = 0;
 		char *new_client_buffer = str_join(client->buf, buffer);
@@ -254,9 +263,10 @@ int receive_message(client *client)
 void receive_clients()
 {
 	client *ptr = client_list;
-	int ret;
+	int ret, len;
 	char *msg;
 
+	// Reading from clients
 	while (ptr)
 	{
 		if (FD_ISSET(ptr->fd, &fd_read))
@@ -293,6 +303,25 @@ void receive_clients()
 		}
 		if (ptr)
 			ptr = ptr->next;
+	}
+
+	// Sending to clients
+	ptr = client_list;
+	while (ptr)
+	{
+		if (FD_ISSET(ptr->fd, &fd_write))
+		{
+			len = 0;
+			if (ptr->to_send != NULL)
+				len = strlen(ptr->to_send);
+
+			// my_printf("Sending buffer", 1);
+
+			send(ptr->fd, ptr->to_send, len, MSG_DONTWAIT);
+			free(ptr->to_send);
+			ptr->to_send = NULL;
+		}
+		ptr = ptr->next;
 	}
 }
 
@@ -337,9 +366,22 @@ int main(int ac, char **av)
 
 	while (1)
 	{
+		FD_ZERO(&fd_read);
 		fd_read = fd_all;
-		fd_write = fd_all;
+
+		// Set write fds as precisely as poossible
+		FD_ZERO(&fd_write);
+		client *ptr = client_list;
+		while (ptr)
+		{
+			if (ptr->to_send != NULL)
+				FD_SET(ptr->fd, &fd_write);
+			ptr = ptr->next;
+		}
+
 		maxfd = find_maxfd(sockfd);
+
+		my_printf("Loop beginning", 1);
 
 		if (select(maxfd + 1, &fd_read, &fd_write, NULL, NULL) < 0) // If there is an error, just continue without reading fd that time.
 			continue;
@@ -349,7 +391,6 @@ int main(int ac, char **av)
 			connfd = accept(sockfd, NULL, NULL);
 			if (connfd >= 0)
 			{
-				fcntl(connfd, F_SETFL, O_NONBLOCK);
 				add_client(connfd);
 			}
 		}
